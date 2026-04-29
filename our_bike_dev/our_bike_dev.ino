@@ -23,7 +23,7 @@ bool runPID = true;
 
 // Charakterystyka BLE dla aplikacji mobilnej
 BLEService bikeService("19B10000-E8F2-537E-4F6C-D104768A1214");
-BLEStringCharacteristic dataChar("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify, 64);
+BLEStringCharacteristic dataChar("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify | BLEWrite, 64);
 
 // Bluetooth
 void setup_ble() {
@@ -93,6 +93,7 @@ void setup() {
   Serial.begin(115200);
   
   setup_wifi(); // Inicjalizacja WiFi
+  setup_ble();
 
   if (!bno.begin()) {
     Serial.println("Failed to initialize BNO055!");
@@ -114,6 +115,12 @@ void setup() {
 }
 
 void loop() {
+  if (dataChar.written()) {
+    String bleCommand = dataChar.value();
+    Serial.print("BLE Command: "); Serial.println(bleCommand);
+    handleCommand(bleCommand);
+  }
+
   // 1. Obsługa komend z Serial (USB)
   if (Serial.available()) {
     handleCommand(Serial.readStringUntil('\n'));

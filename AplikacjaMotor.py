@@ -25,6 +25,7 @@ class BikeDataManager:
         self.is_running = False
         self.conn = None
         self.data = [0.0, 0.0, 0.0, 0.0]
+        self.ble_loop = None
 
     @staticmethod
     def get_available_ports():
@@ -54,24 +55,43 @@ class BikeDataManager:
 
     async def connect_ble_task(self, callback):
         try:
+            # ZAPISUJEMY aktualną pętlę, w której uruchomił się Bluetooth
+            self.ble_loop = asyncio.get_running_loop()
+
             devices = await BleakScanner.discover()
             target = next((d for d in devices if d.name == "Bike-Project"), None)
-            if not target: self.is_running = False; return
+
+            if not target:
+                self.is_running = False
+                return
+
             async with BleakClient(target.address) as client:
+                self.conn = client  # To jest nasz obiekt BleakClient
                 self.mode = 'hardware_ble'
                 self.is_running = True
 
                 def handler(sender, data):
                     try:
                         vals = [float(x) for x in data.decode().split(',')]
-                        if len(vals) == 4: self.data = vals; callback(self.data)
+                        if len(vals) == 4:
+                            self.data = vals
+                            callback(self.data)
                     except:
                         pass
 
                 await client.start_notify(BLE_DATA_UUID, handler)
-                while self.is_running: await asyncio.sleep(0.1)
-        except:
+
+                # Czekamy, dopóki połączenie ma trwać
+                while self.is_running:
+                    await asyncio.sleep(0.1)
+
+                await client.stop_notify(BLE_DATA_UUID)
+        except Exception as e:
+            print(f"Błąd w zadaniu BLE: {e}")
             self.is_running = False
+        finally:
+            self.conn = None
+            self.ble_loop = None
 
     def disconnect(self):
         self.is_running = False
@@ -84,14 +104,22 @@ class BikeDataManager:
         self.mode = 'simulation'
 
     def send_command(self, cmd):
+        """Wysyła komendy przez Serial, WiFi lub Bluetooth"""
         msg = f"{cmd}\n".encode('ascii')
         try:
             if self.mode == 'hardware_serial' and self.conn:
                 self.conn.write(msg)
             elif self.mode == 'hardware_wifi' and self.conn:
                 self.conn.send(msg)
-        except:
-            pass
+            elif self.mode == 'hardware_ble' and self.conn and self.ble_loop:
+                # Używamy zachowanej pętli (ble_loop), aby bezpiecznie wysłać
+                # komendę z wątku Tkintera do wątku Bluetooth
+                asyncio.run_coroutine_threadsafe(
+                    self.conn.write_gatt_char(BLE_DATA_UUID, cmd.encode('ascii')),
+                    self.ble_loop
+                )
+        except Exception as e:
+            print(f"Błąd wysyłania komendy ({self.mode}): {e}")
 
     def update_loop(self, callback):
         while self.is_running:
