@@ -33,23 +33,23 @@ class BikeDataManager:
     def connect_serial(self, port, baudrate=115200):
         try:
             self.conn = serial.Serial(port, baudrate, timeout=0.05)
-            self.mode = 'hardware_serial';
+            self.mode = 'hardware_serial'
             self.is_running = True
             return True
         except Exception as e:
-            messagebox.showerror("Serial Error", f"Błąd: {e}");
+            messagebox.showerror("Serial Error", f"Błąd: {e}")
             return False
 
     def connect_wifi(self, ip, port=80):
         try:
             self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.conn.settimeout(2.0);
+            self.conn.settimeout(2.0)
             self.conn.connect((ip, int(port)))
-            self.mode = 'hardware_wifi';
+            self.mode = 'hardware_wifi'
             self.is_running = True
             return True
         except Exception as e:
-            messagebox.showerror("WiFi Error", f"Błąd: {e}");
+            messagebox.showerror("WiFi Error", f"Błąd: {e}")
             return False
 
     async def connect_ble_task(self, callback):
@@ -58,7 +58,7 @@ class BikeDataManager:
             target = next((d for d in devices if d.name == "Bike-Project"), None)
             if not target: self.is_running = False; return
             async with BleakClient(target.address) as client:
-                self.mode = 'hardware_ble';
+                self.mode = 'hardware_ble'
                 self.is_running = True
 
                 def handler(sender, data):
@@ -80,7 +80,7 @@ class BikeDataManager:
                 self.send_command("stop"); self.conn.close()
             except:
                 pass
-        self.conn = None;
+        self.conn = None
         self.mode = 'simulation'
 
     def send_command(self, cmd):
@@ -110,7 +110,7 @@ class BikeDataManager:
             if self.mode == 'simulation':
                 a, v, w, f = self.data
                 self.data = [a + v * 0.01, v - 9.81 * np.sin(a) * 0.01, w, f]
-                callback(self.data);
+                callback(self.data)
                 time.sleep(0.01)
 
 
@@ -147,7 +147,7 @@ class BikeApp:
         self.port_combo = ttk.Combobox(toolbar, values=self.manager.get_available_ports(), width=12)
         self.port_combo.pack(side=tk.LEFT, padx=2)
 
-        self.ip_entry = ttk.Entry(toolbar, width=12);
+        self.ip_entry = ttk.Entry(toolbar, width=12)
         self.ip_entry.insert(0, "192.168.4.1")
 
         self.btn_conn = ttk.Button(toolbar, text="Connect", command=self.toggle_connection)
@@ -156,12 +156,11 @@ class BikeApp:
         ttk.Button(toolbar, text="START", command=lambda: self.manager.send_command("pid")).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="STOP", command=lambda: self.manager.send_command("stop")).pack(side=tk.LEFT, padx=2)
 
-        self.history_slider = ttk.Scale(toolbar, from_=1, to=30, orient=tk.HORIZONTAL, command=self.update_history_size,
-                                        length=80)
-        self.history_slider.set(10);
+        self.history_slider = ttk.Scale(toolbar, from_=1, to=30, orient=tk.HORIZONTAL, command=self.update_history_size, length=80)
+        self.history_slider.set(10)
         self.history_slider.pack(side=tk.LEFT, padx=5)
 
-        self.lbl_hist = ttk.Label(toolbar, text="10s");
+        self.lbl_hist = ttk.Label(toolbar, text="10s")
         self.lbl_hist.pack(side=tk.LEFT)
 
         ttk.Checkbutton(toolbar, text="Visual", variable=self.show_visual, command=self.update_plot_layout).pack(
@@ -186,9 +185,9 @@ class BikeApp:
             self.ax2 = self.fig.add_subplot(gs[1, 0])
             self.ax_vis = self.fig.add_subplot(gs[:, 1])
 
-            self.ax_vis.set_aspect('equal');
+            self.ax_vis.set_aspect('equal')
             self.ax_vis.axis('off')
-            self.ax_vis.set_xlim(-0.7, 0.7);
+            self.ax_vis.set_xlim(-1.1, 1.1)
             self.ax_vis.set_ylim(-0.1, 1.2)
             self.ax_vis.axhline(0, color='black', lw=2)
             self.ax_vis.plot([0, np.sin(-0.4)], [0, np.cos(-0.4)], color='gray', ls='--', lw=1)
@@ -204,7 +203,7 @@ class BikeApp:
         self.line_wheel, = self.ax2.plot([], [], 'g-', lw=1, label='Wheel')
 
         for ax in [self.ax1, self.ax2]:
-            ax.grid(True, alpha=0.3);
+            ax.grid(True, alpha=0.3)
             ax.legend(loc='upper right', fontsize='small')
 
         self.fig.tight_layout()
@@ -215,7 +214,7 @@ class BikeApp:
         if hasattr(self, 'lbl_hist'): self.lbl_hist.config(text=f"{int(float(val))}s")
 
     def on_mode_change(self, val):
-        self.port_combo.pack_forget();
+        self.port_combo.pack_forget()
         self.ip_entry.pack_forget()
         if val == "Serial":
             self.port_combo.pack(side=tk.LEFT, padx=2, after=self.mode_menu)
@@ -224,7 +223,7 @@ class BikeApp:
 
     def toggle_connection(self):
         if not self.manager.is_running:
-            mode = self.conn_type.get();
+            mode = self.conn_type.get()
             success = False
             if mode == "Serial":
                 success = self.manager.connect_serial(self.port_combo.get())
@@ -243,22 +242,22 @@ class BikeApp:
 
     def receive_data(self, data):
         curr_time = time.time() - self.start_time
-        self.times.append(curr_time);
-        self.angle_q.append(data[0]);
+        self.times.append(curr_time)
+        self.angle_q.append(data[0])
         self.wheel_q.append(data[2])
 
     def refresh_ui(self):
         if len(self.times) > 0:
             num_pts = self.display_points.get()
             t_list = list(self.times)[-num_pts:]
-            a_list = list(self.angle_q)[-num_pts:];
+            a_list = list(self.angle_q)[-num_pts:]
             w_list = list(self.wheel_q)[-num_pts:]
 
             self.line_angle.set_data(t_list, a_list)
             self.line_wheel.set_data(t_list, w_list)
 
             for ax in [self.ax1, self.ax2]:
-                ax.relim();
+                ax.relim()
                 ax.autoscale_view()
                 if len(t_list) > 1: ax.set_xlim(t_list[0], t_list[-1])
 
@@ -274,11 +273,11 @@ class BikeApp:
     def on_closing(self):
         self.manager.disconnect()
         if self._after_id: self.root.after_cancel(self._after_id)
-        self.root.quit();
+        self.root.quit()
         self.root.destroy()
 
 
 if __name__ == "__main__":
-    root = tk.Tk();
-    app = BikeApp(root);
+    root = tk.Tk()
+    app = BikeApp(root)
     root.mainloop()
