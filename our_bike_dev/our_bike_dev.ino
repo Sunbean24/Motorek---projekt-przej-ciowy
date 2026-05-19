@@ -18,6 +18,9 @@ volatile float integral_decay_factor = 0.9999f;
 volatile float angle=0.0f, velocity=0.0f, acc=0.0f;
 volatile int lastMicros = 0, lastCount;
 
+// --- NOWOŚĆ: Przesunięcie zera (offset) ---
+float angle_offset = -1.2f; 
+
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 bool runPID = true;
 
@@ -102,6 +105,9 @@ void setup() {
   
   delay(1000);
   bno.setExtCrystalUse(true);
+  
+  // --- NOWOŚĆ: Zmiana trybu na IMUPLUS (ignoruje zakłócenia magnetyczne z silnika) ---
+  //bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_IMUPLUS);
   bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_NDOF);
   
   encoder1.resetCounter(0);
@@ -157,12 +163,14 @@ void battery_read() {
   M3.setDuty(0);
   float batteryVoltage = battery.getRaw()/236.0;
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-  angle = -euler.y();
+  
+  // --- NOWOŚĆ: Korekta zera uwzględniona w trybie czuwania ---
+  angle = -euler.y() - angle_offset;
   
   // Opcjonalne wysyłanie statusu baterii do Seriala
   Serial.print("Battery: "); Serial.print(batteryVoltage, 3);
   Serial.print(", Angle: "); Serial.println(angle, 2);
-  delay(1000);
+  //delay(1000);
 }
 
 void PID_controller() {
@@ -173,7 +181,10 @@ void PID_controller() {
 
   acc = -accel.y() * DEG_TO_RAD;                    
   velocity = gyro.y() * DEG_TO_RAD;       
-  angle = -euler.y() * DEG_TO_RAD;
+  
+  // --- NOWOŚĆ: Aplikujemy mechaniczny offset przed przejściem na radiany ---
+  float corrected_angle_deg = -euler.y() - angle_offset;
+  angle = corrected_angle_deg * DEG_TO_RAD;
 
   I *= integral_decay_factor;
   if(abs(angle) > 0.01) I += angle * Ts;
@@ -193,7 +204,7 @@ void PID_controller() {
   unsigned long timestamp = millis();
 
   // --- WYSYŁANIE DANYCH (SERIAL + WIFI) ---
-  SString dataFrame = String(timestamp) + "," + 
+  String dataFrame = String(timestamp) + "," + 
                    String(angle, 4) + "," + 
                    String(velocity, 4) + "," + 
                    String(vel_wheel, 4) + "," + 
@@ -212,6 +223,6 @@ void PID_controller() {
     dataChar.writeValue(dataFrame);
   }
 
-  if(abs(angle) < 0.4) M3.setFill(fill);
+  if(abs(angle) < (10.0f * DEG_TO_RAD)) M3.setFill(fill);
   else M3.setFill(0);
 }
