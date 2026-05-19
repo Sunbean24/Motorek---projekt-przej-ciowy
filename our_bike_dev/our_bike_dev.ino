@@ -191,7 +191,7 @@ void PID_controller() {
   fill = constrain(fill, -255, 255);
 
   // --- WYSYŁANIE DANYCH (SERIAL + WIFI) ---
-  String dataFrame = String(angle, 4) + "," + String(velocity, 4) + "," + 
+  String dataFrame = String(angle, 4) + "," + String(velocity, 4) + "," + String(acc, 4) + "," + 
                      String(vel_wheel, 4) + "," + String(fill, 2);
   
   // 1. Zawsze wysyłaj po kablu (debugowanie)
