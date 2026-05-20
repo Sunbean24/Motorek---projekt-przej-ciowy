@@ -188,7 +188,7 @@ void PID_controller() {
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
   acc = -accel.y();                    
-  velocity = gyro.y();       
+  velocity = -gyro.y();       
   
   // --- NOWOŚĆ: Aplikujemy mechaniczny offset przed przejściem na radiany ---
   float corrected_angle_deg = -euler.y() - angle_offset;
