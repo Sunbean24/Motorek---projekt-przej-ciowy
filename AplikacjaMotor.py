@@ -20,27 +20,28 @@ UPDATE_MS = 33
 BLE_SERVICE_UUID = "19B10000-E8F2-537E-4F6C-D104768A1214"
 BLE_DATA_UUID = "19B10001-E8F2-537E-4F6C-D104768A1214"
 
-
 class BikeDataManager:
     def __init__(self):
         self.mode = 'simulation'
         self.is_running = False
         self.conn = None
-        # Zmieniono z 4 na 5 zmiennych wyświetlanych w UI (bez timestampu)
         self.data = [0.0, 0.0, 0.0, 0.0, 0.0] 
         self.ble_loop = None
         
         # --- ZMIENNE DO ZAPISU I INTERPOLACJI ---
         self.last_timestamp = None
         self.last_raw_data = None
-        self.EXPECTED_DT_S = 0.01  # Zmieniono z 30 ms na 0.01 s (bo podajemy w sekundach)
-        self.ANGLE_LIMIT = 0.1745   # 10 stopni w radianach
+        self.EXPECTED_DT_S = 0.01  
+        
+        # --- Parametry histerezy ---
+        self.ANGLE_LIMIT = 0.1745      # Podstawowy limit (~10 stopni)
+        self.ANGLE_HYSTERESIS = 0.035  # Lupa histerezy (~2 stopnie w obie strony)
+        self.current_is_valid = 0      # Pamięć poprzedniego stanu
         
         self.is_recording = False
         self.recorded_data = []
         self.sim_time = 0
         
-        # --- NOWOŚĆ: Status puszczenia motorka z klawiatury ---
         self.user_free = 0  # 1 = puszczony (balansuje), 0 = trzymany ręką
 
     @staticmethod
@@ -87,7 +88,6 @@ class BikeDataManager:
                 def handler(sender, data):
                     try:
                         vals = [float(x) for x in data.decode().split(',')]
-                        # Oczekujemy teraz 6 wartości od Arduino!
                         if len(vals) == 6:
                             self.process_incoming_data(vals, callback)
                     except:
@@ -104,12 +104,23 @@ class BikeDataManager:
             self.conn = None
             self.ble_loop = None
 
+    def _check_validity_hysteresis(self, angle):
+        """Sprawdza ważność kąta z użyciem histerezy"""
+        abs_angle = abs(angle)
+        if self.current_is_valid:
+            if abs_angle > (self.ANGLE_LIMIT + self.ANGLE_HYSTERESIS):
+                self.current_is_valid = 0
+        else:
+            if abs_angle < (self.ANGLE_LIMIT - self.ANGLE_HYSTERESIS):
+                self.current_is_valid = 1
+                
+        return self.current_is_valid
+
     def process_incoming_data(self, vals, callback):
-        # vals to teraz: [0:Czas_s, 1:Kąt_rad, 2:Gyro_rad_s, 3:Acc_m_s2, 4:Wheel_rad, 5:PWM]
         current_time_s = vals[0]
         angle = vals[1]
         
-        is_valid = 1 if abs(angle) < self.ANGLE_LIMIT else 0
+        is_valid = self._check_validity_hysteresis(angle)
 
         if self.last_timestamp is None:
             self._push_data(vals, is_valid, callback)
@@ -117,7 +128,6 @@ class BikeDataManager:
 
         dt = current_time_s - self.last_timestamp
         
-        # Interpolacja w razie zgubionych pakietów
         if dt > (self.EXPECTED_DT_S * 1.5):
             missed_packets = int(dt // self.EXPECTED_DT_S)
             if missed_packets > 20: missed_packets = 20 
@@ -129,7 +139,7 @@ class BikeDataManager:
                     interp_val = self.last_raw_data[j] + (vals[j] - self.last_raw_data[j]) * fraction
                     interp_vals.append(interp_val)
                 
-                interp_valid = 1 if abs(interp_vals[1]) < self.ANGLE_LIMIT else 0
+                interp_valid = self._check_validity_hysteresis(interp_vals[1])
                 self._push_data(interp_vals, interp_valid, callback)
 
         self._push_data(vals, is_valid, callback)
@@ -138,15 +148,36 @@ class BikeDataManager:
         self.last_timestamp = vals[0]
         self.last_raw_data = vals
         
-        # ui_data leci do GUI: [Kąt, Gyro, Acc, Wheel, PWM]
         ui_data = vals[1:6] 
         self.data = ui_data 
         callback(ui_data)
         
         if self.is_recording:
-            # Zapis pełnej ramki (7 kolumn dla Modelu Pythonowego!)
-            row = [vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], self.user_free]
-            self.recorded_data.append(row)
+            is_useful = (self.user_free == 1 and is_valid == 1)
+
+            if is_useful:
+                row = [vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], self.user_free]
+                self.recorded_data.append(row)
+            else:
+                if len(self.recorded_data) > 0:
+                    self.save_csv()
+
+    def save_csv(self):
+        if not self.recorded_data or len(self.recorded_data) < 15:
+            self.recorded_data = [] 
+            return
+            
+        filename = datetime.datetime.now().strftime("pomiary/BikeData_%Y%m%d_%H%M%S.csv")
+        try:
+            with open(filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp(s)", "angle", "velocity", "acceleration", "wheel_angle", "pwm", "user_free"])
+                writer.writerows(self.recorded_data)
+            print(f"Zapisano czysty przejazd: {filename} (Próbki: {len(self.recorded_data)})")
+        except Exception as e:
+            print(f"Błąd zapisu pliku: {e}")
+            
+        self.recorded_data = [] 
 
     def disconnect(self):
         self.is_running = False
@@ -186,13 +217,13 @@ class BikeDataManager:
                 
                 if line:
                     vals = [float(x) for x in line.split(',')]
-                    if len(vals) == 6: # Czekamy na 6 elementów!
+                    if len(vals) == 6: 
                         self.process_incoming_data(vals, callback)
             except:
                 pass
             
             if self.mode == 'simulation':
-                self.sim_time += 0.033 # Czas musi być w s
+                self.sim_time += 0.033 
                 a, v, acc, w, f = self.data
                 sim_vals = [self.sim_time, a + v * 0.01, v - 9.81 * np.sin(a) * 0.01, -9.81*np.sin(a), w, f]
                 self.process_incoming_data(sim_vals, callback)
@@ -205,6 +236,9 @@ class BikeApp:
         self.root.title("Bike Monitor - Pro Layout")
         self.manager = BikeDataManager()
         self._after_id = None
+        
+        # --- NOWOŚĆ: Timer do debouncingu klawiatury ---
+        self._key_release_id = None
 
         self.full_history = 6000
         self.display_points = tk.IntVar(value=1000)
@@ -240,9 +274,9 @@ class BikeApp:
         self.btn_conn.pack(side=tk.LEFT, padx=2)
 
         ttk.Button(toolbar, text="START", command=lambda: self.manager.send_command("pid")).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="STOP", command=lambda: self.manager.send_command("stop")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="STOP", command=self.stop_clicked).pack(side=tk.LEFT, padx=2)
         
-        self.btn_record = ttk.Button(toolbar, text="REC 🔴", command=self.toggle_record)
+        self.btn_record = ttk.Button(toolbar, text="REC AUTO 🔴", command=self.toggle_record)
         self.btn_record.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(toolbar, text="Status:").pack(side=tk.LEFT, padx=(10, 2))
@@ -273,41 +307,43 @@ class BikeApp:
         self.root.bind("<KeyRelease-K>", self.on_key_release)
 
     def on_key_press(self, event):
+        # Jeśli zgłoszono wciśnięcie, anulujemy zaplanowane opóźnione "puszczenie" klawisza.
+        # To eliminuje problem auto-repeat systemu operacyjnego.
+        if self._key_release_id is not None:
+            self.root.after_cancel(self._key_release_id)
+            self._key_release_id = None
+
         if self.manager.user_free == 0:
             self.manager.user_free = 1
             self.lbl_free_status.config(text="FREE 🟢", foreground="green")
 
     def on_key_release(self, event):
+        # Zamiast od razu puszczać motocykl w systemie, dajemy systemowi 50 ms opóźnienia.
+        # Jeśli to tylko auto-repeat, w ciągu tych 50 ms pojawi się zdarzenie "on_key_press", 
+        # które anuluje to wykonanie.
+        self._key_release_id = self.root.after(50, self._process_key_release)
+
+    def _process_key_release(self):
+        self._key_release_id = None
         if self.manager.user_free == 1:
             self.manager.user_free = 0
             self.lbl_free_status.config(text="HELD 🔴", foreground="red")
+
+    def stop_clicked(self):
+        self.manager.send_command("stop")
+        if self.manager.is_recording:
+            self.manager.save_csv()
 
     def toggle_record(self):
         if not self.manager.is_recording:
             self.manager.recorded_data = [] 
             self.manager.is_recording = True
-            self.btn_record.config(text="STOP ⬛")
-            print("Rozpoczęto nagrywanie...")
+            self.btn_record.config(text="REC ON ⬛")
+            print("Tryb Auto-Zapis włączony. Program sam zapisze plik przy każdym puszczeniu i złapaniu motocykla.")
         else:
             self.manager.is_recording = False
-            self.btn_record.config(text="REC 🔴")
-            self.save_csv()
-
-    def save_csv(self):
-        if not self.manager.recorded_data:
-            print("Brak danych do zapisu.")
-            return
-            
-        filename = datetime.datetime.now().strftime("BikeData_%Y%m%d_%H%M%S.csv")
-        try:
-            with open(filename, 'w', newline='') as f:
-                writer = csv.writer(f)
-                # Zaktualizowane kolumny CSV! (is_valid wywalone jako zbędne przy user_free)
-                writer.writerow(["timestamp(s)", "angle", "velocity", "acceleration", "wheel_angle", "pwm", "user_free"])
-                writer.writerows(self.manager.recorded_data)
-            print(f"Zapisano plik: {filename} (Liczba próbek: {len(self.manager.recorded_data)})")
-        except Exception as e:
-            print(f"Błąd zapisu pliku: {e}")
+            self.btn_record.config(text="REC AUTO 🔴")
+            self.manager.save_csv() 
 
     def update_plot_layout(self):
         self.fig.clear()
@@ -377,8 +413,8 @@ class BikeApp:
     def receive_data(self, data):
         curr_time = time.time() - self.start_time
         self.times.append(curr_time)
-        self.angle_q.append(data[0])  # Kąt
-        self.wheel_q.append(data[3])  # Prędkość koła / przesunięcie jest teraz 4 w kolejności
+        self.angle_q.append(data[0])  
+        self.wheel_q.append(data[3])  
 
     def refresh_ui(self):
         if len(self.times) > 0:
@@ -409,7 +445,6 @@ class BikeApp:
         if self._after_id: self.root.after_cancel(self._after_id)
         self.root.quit()
         self.root.destroy()
-
 
 if __name__ == "__main__":
     root = tk.Tk()

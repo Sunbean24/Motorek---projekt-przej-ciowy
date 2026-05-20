@@ -13,7 +13,7 @@
 
 volatile float I = 0, Ts=0.01;
 volatile int Ts_micro = 10000;
-volatile float kp=4000.0f, ki=30.0f, kd=500.0f, k_omega = -0.007;
+volatile float kp=4500.0f, ki=20.0f, kd=1000.0f, k_omega = -0.00;
 volatile float integral_decay_factor = 0.9999f;
 volatile float angle=0.0f, velocity=0.0f, acc=0.0f;
 volatile int lastMicros = 0, lastCount;
