@@ -95,7 +95,13 @@ void handleCommand(String command) {
 void setup() {
   Serial.begin(115200);
   
-  setup_wifi(); // Inicjalizacja WiFi
+  // Zabezpieczenie pętli czasu rzeczywistego przed zawieszeniem na Serialu!
+  Serial.setTimeout(5); 
+  
+  unsigned long startWait = millis();
+  while (!Serial && millis() - startWait < 3000) { ; }
+  
+  setup_wifi(); 
   setup_ble();
 
   if (!bno.begin()) {
@@ -105,9 +111,6 @@ void setup() {
   
   delay(1000);
   bno.setExtCrystalUse(true);
-  
-  // --- NOWOŚĆ: Zmiana trybu na IMUPLUS (ignoruje zakłócenia magnetyczne z silnika) ---
-  //bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_IMUPLUS);
   bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_NDOF);
   
   encoder1.resetCounter(0);
@@ -121,29 +124,31 @@ void setup() {
 }
 
 void loop() {
-  if (dataChar.written()) {
-    String bleCommand = dataChar.value();
-    Serial.print("BLE Command: "); Serial.println(bleCommand);
-    handleCommand(bleCommand);
-  }
+  // Możesz na razie zostawić "whatever" do debugowania - jeśli będzie pędzić, układ jest wolny od "zawieszek"
+  // Serial.println("whatever"); 
 
-  // 1. Obsługa komend z Serial (USB)
+  // if (dataChar.written()) {
+  //   String bleCommand = dataChar.value();
+  //   handleCommand(bleCommand);
+  // }
+
+  // Odczyt z Serial (dzięki setTimeout(5) już nie zablokuje pętli!)
   if (Serial.available()) {
     handleCommand(Serial.readStringUntil('\n'));
   }
 
-  // 2. Obsługa komend z WiFi
-  WiFiClient newClient = server.available();
-  if (newClient) {
-    remoteClient = newClient; // Zapamiętaj podłączoną aplikację Python
-    Serial.println("Aplikacja Python podłączona przez WiFi");
-  }
+  // Obsługa WiFi
+  // WiFiClient newClient = server.available();
+  // if (newClient) {
+  //   remoteClient = newClient; 
+  //   remoteClient.setTimeout(5); // Odporność na ścinki z WiFi
+  //   Serial.println("Aplikacja Python podłączona przez WiFi");
+  // }
   
-  if (remoteClient && remoteClient.connected() && remoteClient.available()) {
-    handleCommand(remoteClient.readStringUntil('\n'));
-  }
+  // if (remoteClient && remoteClient.connected() && remoteClient.available()) {
+  //   handleCommand(remoteClient.readStringUntil('\n'));
+  // }
 
-  // Pętla czasu rzeczywistego (10ms)
   lastMicros = micros();
   unsigned long targetMicros = lastMicros + Ts_micro;
   
@@ -154,7 +159,9 @@ void loop() {
   }
   
   long time_to_delay = targetMicros - micros();
-  if (time_to_delay > 0) delayMicroseconds(time_to_delay);
+  if (time_to_delay > 0) {
+    delayMicroseconds(time_to_delay);
+  }
 }
 
 float enc_vel, enc_acc;
@@ -174,14 +181,14 @@ void battery_read() {
 }
 
 void PID_controller() {
-  long enkoder1 = encoder1.getRawCount();
-  derive(Ts, enkoder1, enc_vel, enc_acc);
+  long long enkoder =  encoder1.getRawCount();
+  derive(Ts, enkoder, enc_vel, enc_acc);
   imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
-  acc = -accel.y();                    
-  velocity = gyro.y();       
+  acc = -accel.y() * DEG_TO_RAD;                    
+  velocity = gyro.y() * DEG_TO_RAD;       
   
   // --- NOWOŚĆ: Aplikujemy mechaniczny offset przed przejściem na radiany ---
   float corrected_angle_deg = -euler.y() - angle_offset;
@@ -197,19 +204,18 @@ void PID_controller() {
   int dir_PID = 1; 
   if(PID < 0) dir_PID = -1;  
   
-  float correction = friction_correction(PID, acc);
   float frict = dir_PID * (friction(enc_vel));
-  float fill = PID + frict + correction;
+  float fill = PID + frict;
   fill = constrain(fill, -255, 255);
-  float enk_rad = enkoder1 * enc_to_rad;
+
   unsigned long timestamp = millis();
 
   // --- WYSYŁANIE DANYCH (SERIAL + WIFI) ---
-  String dataFrame = String(timestamp / 1000.0, 3) + "," + 
+  String dataFrame = String(float(timestamp)/1000, 3) + "," + 
                    String(angle, 4) + "," + 
-                   String(velocity, 4) + "," + 
+                   String(velocity, 4) + "," +
                    String(acc, 4) + "," + 
-                   String(enk_rad, 4) + "," + 
+                   String(enkoder*enc_to_rad, 4) + "," + 
                    String(fill, 2);
   
   // 1. Zawsze wysyłaj po kablu (debugowanie)
