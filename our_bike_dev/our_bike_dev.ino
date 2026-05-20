@@ -9,26 +9,28 @@
 #include "filter.h"
 
 #define enc_to_rad 0.1308996938995
-#define DEG_TO_RAD 0.01745329 // pi/180
+#define DEG_TO_RAD 0.01745329
 
-volatile float I = 0, Ts=0.01;
+volatile float I = 0, Ts = 0.01;
 volatile int Ts_micro = 10000;
-volatile float kp=4000.0f, ki=30.0f, kd=500.0f, k_omega = -0.007;
+volatile float kp = 4000.0f, ki = 30.0f, kd = 500.0f, k_omega = -0.007;
 volatile float integral_decay_factor = 0.9999f;
-volatile float angle=0.0f, velocity=0.0f, acc=0.0f;
+volatile float angle = 0.0f, velocity = 0.0f, acc = 0.0f;
 volatile int lastMicros = 0, lastCount;
 
-// --- NOWOŚĆ: Przesunięcie zera (offset) ---
 float angle_offset = -1.2f; 
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 bool runPID = true;
 
-// Charakterystyka BLE dla aplikacji mobilnej
 BLEService bikeService("19B10000-E8F2-537E-4F6C-D104768A1214");
 BLEStringCharacteristic dataChar("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify | BLEWrite, 64);
 
-// Bluetooth
+char ssid[] = "Motorek_Projekt"; 
+char pass[] = "inzynierka2026";  
+WiFiServer server(80);
+WiFiClient remoteClient;         
+
 void setup_ble() {
   if (!BLE.begin()) return;
   BLE.setLocalName("Bike-Project");
@@ -38,19 +40,12 @@ void setup_ble() {
   BLE.advertise();
 }
 
-// --- KONFIGURACJA WIFI ---
-char ssid[] = "Motorek_Projekt"; // Nazwa sieci WiFi widoczna w laptopie
-char pass[] = "inzynierka2026";  // Hasło (min. 8 znaków)
-WiFiServer server(80);
-WiFiClient remoteClient;         // Globalny obiekt klienta dla WiFi
-
 void setup_wifi() {
   if (WiFi.status() == WL_NO_MODULE) {
     Serial.println("Błąd: Brak modułu WiFi!");
     return;
   }
   
-  // Tworzenie własnej sieci (Access Point)
   Serial.print("Tworzenie sieci AP: ");
   Serial.println(ssid);
   
@@ -61,10 +56,9 @@ void setup_wifi() {
   
   server.begin();
   Serial.print("IP motorka: "); 
-  Serial.println(WiFi.localIP()); // Zazwyczaj 192.168.4.1
+  Serial.println(WiFi.localIP()); 
 }
 
-// Funkcja pomocnicza do obsługi komend (Serial i WiFi)
 void handleCommand(String command) {
   command.trim();
   if (command.startsWith("setkp ")) {
@@ -95,7 +89,7 @@ void handleCommand(String command) {
 void setup() {
   Serial.begin(115200);
   
-  setup_wifi(); // Inicjalizacja WiFi
+  setup_wifi(); 
   setup_ble();
 
   if (!bno.begin()) {
@@ -105,9 +99,6 @@ void setup() {
   
   delay(1000);
   bno.setExtCrystalUse(true);
-  
-  // --- NOWOŚĆ: Zmiana trybu na IMUPLUS (ignoruje zakłócenia magnetyczne z silnika) ---
-  //bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_IMUPLUS);
   bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_NDOF);
   
   encoder1.resetCounter(0);
@@ -127,15 +118,13 @@ void loop() {
     handleCommand(bleCommand);
   }
 
-  // 1. Obsługa komend z Serial (USB)
   if (Serial.available()) {
     handleCommand(Serial.readStringUntil('\n'));
   }
 
-  // 2. Obsługa komend z WiFi
   WiFiClient newClient = server.available();
   if (newClient) {
-    remoteClient = newClient; // Zapamiętaj podłączoną aplikację Python
+    remoteClient = newClient; 
     Serial.println("Aplikacja Python podłączona przez WiFi");
   }
   
@@ -143,7 +132,6 @@ void loop() {
     handleCommand(remoteClient.readStringUntil('\n'));
   }
 
-  // Pętla czasu rzeczywistego (10ms)
   lastMicros = micros();
   unsigned long targetMicros = lastMicros + Ts_micro;
   
@@ -161,68 +149,67 @@ float enc_vel, enc_acc;
 
 void battery_read() {
   M3.setDuty(0);
-  float batteryVoltage = battery.getRaw()/236.0;
+  float batteryVoltage = battery.getRaw() / 236.0;
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
   
-  // --- NOWOŚĆ: Korekta zera uwzględniona w trybie czuwania ---
   angle = -euler.y() - angle_offset;
   
-  // Opcjonalne wysyłanie statusu baterii do Seriala
   Serial.print("Battery: "); Serial.print(batteryVoltage, 3);
   Serial.print(", Angle: "); Serial.println(angle, 2);
-  //delay(1000);
 }
 
 void PID_controller() {
-  derive(Ts, encoder1.getRawCount(), enc_vel, enc_acc);
-  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+  long raw_pulses = encoder1.getRawCount();
+  derive(Ts, raw_pulses, enc_vel, enc_acc);
+  
+  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
-  acc = -accel.y() * DEG_TO_RAD;                    
-  velocity = gyro.y() * DEG_TO_RAD;       
+  acc = -accel.y();               
+  velocity = gyro.y();            
   
-  // --- NOWOŚĆ: Aplikujemy mechaniczny offset przed przejściem na radiany ---
   float corrected_angle_deg = -euler.y() - angle_offset;
-  angle = corrected_angle_deg * DEG_TO_RAD;
+  angle = corrected_angle_deg * DEG_TO_RAD; 
 
   I *= integral_decay_factor;
   if(abs(angle) > 0.01) I += angle * Ts;
   if (abs(I)>10) I = copysign(10, I);
 
-  float vel_wheel = enc_vel * enc_to_rad;
+  float vel_wheel = enc_vel * enc_to_rad; 
   float PID = kp * angle + kd * velocity + ki * I + k_omega * vel_wheel;
   
-  int dir_PID = 1; 
-  if(PID < 0) dir_PID = -1;  
+  int dir_PID = (PID < 0) ? -1 : 1; 
   
   float correction = friction_correction(PID, acc);
   float frict = dir_PID * (friction(enc_vel));
-  float fill = PID + frict + correction;
-  fill = constrain(fill, -255, 255);
+  float fill = constrain(PID + frict + correction, -255, 255);
 
-  unsigned long timestamp = millis();
+  float timestamp_s = millis() / 1000.0; 
 
-  // --- WYSYŁANIE DANYCH (SERIAL + WIFI) ---
-  String dataFrame = String(timestamp) + "," + 
+  // --- ZMIANA: Przeliczenie impulsów na przebyty kąt koła w radianach ---
+  float wheel_angle_rad = raw_pulses * enc_to_rad;
+
+  String dataFrame = String(timestamp_s, 3) + "," + 
                    String(angle, 4) + "," + 
                    String(velocity, 4) + "," + 
-                   String(vel_wheel, 4) + "," + 
+                   String(acc, 4) + "," + 
+                   String(wheel_angle_rad, 4) + "," + 
                    String(fill, 2);
   
-  // 1. Zawsze wysyłaj po kablu (debugowanie)
   Serial.println(dataFrame);
 
-  // 2. WiFi - tylko jeśli klient jest podłączony (oszczędność energii)
   if (remoteClient && remoteClient.connected()) {
     remoteClient.println(dataFrame);
   }
 
-  // 3. Bluetooth - tylko jeśli ktoś słucha (oszczędność energii)
   if (BLE.connected()) {
     dataChar.writeValue(dataFrame);
   }
 
-  if(abs(angle) < (10.0f * DEG_TO_RAD)) M3.setFill(fill);
-  else M3.setFill(0);
+  if(abs(angle) < (10.0f * DEG_TO_RAD)) {
+    M3.setFill(fill);
+  } else {
+    M3.setFill(0);
+  }
 }
