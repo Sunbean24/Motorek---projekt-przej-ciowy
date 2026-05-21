@@ -183,14 +183,17 @@ void battery_read() {
 void PID_controller() {
   long long enkoder =  encoder1.getRawCount();
   derive(Ts, enkoder, enc_vel, enc_acc);
-  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+  
+  // 1. ZMIANA: LINEARACCEL zamiast ACCELEROMETER (czyste przyspieszenie bez grawitacji)
+  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
-  acc = -accel.y();                    
-  velocity = gyro.y();       
+  // 2. ZMIANA: Powrót do mnożnika DEG_TO_RAD dla poprawnego działania PID
+  acc = -accel.y() * DEG_TO_RAD;                    
+  velocity = gyro.y() * DEG_TO_RAD;       
   
-  // --- NOWOŚĆ: Aplikujemy mechaniczny offset przed przejściem na radiany ---
+  // Mechaniczny offset
   float corrected_angle_deg = -euler.y() - angle_offset;
   angle = corrected_angle_deg * DEG_TO_RAD;
 
@@ -210,13 +213,13 @@ void PID_controller() {
 
   unsigned long timestamp = millis();
 
-  // --- WYSYŁANIE DANYCH (SERIAL + WIFI) ---
+  // --- WYSYŁANIE DANYCH: Struktura pozostawiona BEZ ZMIAN (dokładnie 6 elementów) ---
   String dataFrame = String(float(timestamp)/1000, 3) + "," + 
-                   String(angle, 4) + "," + 
-                   String(velocity, 4) + "," +
-                   String(acc, 4) + "," + 
-                   String(enkoder*enc_to_rad, 4) + "," + 
-                   String(fill, 2);
+                     String(angle, 4) + "," + 
+                     String(velocity, 4) + "," +
+                     String(acc, 4) + "," + 
+                     String(enkoder*enc_to_rad, 4) + "," + 
+                     String(fill, 2);
   
   // 1. Zawsze wysyłaj po kablu (debugowanie)
   Serial.println(dataFrame);
@@ -231,6 +234,7 @@ void PID_controller() {
     dataChar.writeValue(dataFrame);
   }
 
+  // Zabezpieczenie silnika przy wychyleniu ponad 10 stopni
   if(abs(angle) < (10.0f * DEG_TO_RAD)) M3.setFill(fill);
   else M3.setFill(0);
 }
