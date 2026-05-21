@@ -9,30 +9,29 @@
 #include "filter.h"
 
 #define enc_to_rad 0.1308996938995
-#define DEG_TO_RAD 0.01745329 
+#define DEG_TO_RAD 0.01745329251
 
-volatile float Ts = 0.01;
+volatile float I = 0, Ts = 0.01;
 volatile int Ts_micro = 10000;
 volatile float angle = 0.0f, velocity = 0.0f, acc = 0.0f;
 volatile int lastMicros = 0, lastCount;
 
-// --- WYNIKI OPTYMALIZACJI BPTT ---
-volatile float K_angle = 13.33549213f;   
-volatile float K_velocity = -1.19186223f; 
-volatile float w_friction = 0.0683f;      
-volatile float w_emf = 0.1397f;           
+volatile float integral_decay_factor = 0.9999f; 
 
 float angle_offset = -1.2f; 
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 bool runPID = true;
 
-// --- IDENTYFIKACJA MACIERZY SINDy ---
+// Indeksy: 0 = K_angle, 1 = K_velocity, 2 = K_wheel, 3 = K_integral
+volatile float K_gains[4] = {-15.00000000f, -3.00000000f, 0.01000000f, -5.00000000f};
+volatile float w_friction = 1.0000f;
+volatile float w_emf = 0.0500f;
+
 const float C_matrix[3][8] = {
-  //  om_p,     om_w,      u,       sin(th),   tanh(0.5u),  tanh(u),   tanh(2u),   tanh(5u)
-  {   1.000f,   0.000f,   0.000f,    0.000f,     0.000f,    0.000f,    0.000f,    0.000f }, 
-  {   2.314f,   0.000f,   1.449f, -340.262f,    29.826f,   -8.580f,  -12.456f,  -12.487f }, 
-  {   2.155f,  -0.095f,  14.403f,    0.120f,    -6.507f,   -6.899f,   -6.915f,   -6.915f }  
+  { 1.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f },
+  { 2.3136f, 0.0000f, 1.4490f, -340.2619f, 29.8258f, -8.5801f, -12.4564f, -12.4870f },
+  { 2.1551f, -0.0953f, 14.4028f, 0.1197f, -6.5069f, -6.8991f, -6.9153f, -6.9154f }
 };
 
 BLEService bikeService("19B10000-E8F2-537E-4F6C-D104768A1214");
@@ -76,15 +75,12 @@ void setup_wifi() {
     Serial.println("Błąd: Brak modułu WiFi!");
     return;
   }
-  
   Serial.print("Tworzenie sieci AP: ");
   Serial.println(ssid);
-  
   if (WiFi.beginAP(ssid, pass) != WL_AP_LISTENING) {
     Serial.println("Błąd tworzenia punktu dostępowego!");
     while (1);
   }
-  
   server.begin();
   Serial.print("IP motorka: "); 
   Serial.println(WiFi.localIP()); 
@@ -93,11 +89,17 @@ void setup_wifi() {
 void handleCommand(String command) {
   command.trim();
   if (command.startsWith("setka ")) {
-    K_angle = command.substring(6).toFloat();
-    Serial.print("K_angle set to: "); Serial.println(K_angle, 6);
+    K_gains[0] = command.substring(6).toFloat();
+    Serial.print("K_angle set to: "); Serial.println(K_gains[0], 6);
   } else if (command.startsWith("setkv ")) {
-    K_velocity = command.substring(6).toFloat();
-    Serial.print("K_velocity set to: "); Serial.println(K_velocity, 6);
+    K_gains[1] = command.substring(6).toFloat();
+    Serial.print("K_velocity set to: "); Serial.println(K_gains[1], 6);
+  } else if (command.startsWith("setkw ")) { 
+    K_gains[2] = command.substring(6).toFloat();
+    Serial.print("K_wheel set to: "); Serial.println(K_gains[2], 6);
+  } else if (command.startsWith("setki ")) {
+    K_gains[3] = command.substring(6).toFloat();
+    Serial.print("K_integral set to: "); Serial.println(K_gains[3], 6);
   } else if (command.startsWith("setwf ")) {
     w_friction = command.substring(6).toFloat();
     Serial.print("w_friction set to: "); Serial.println(w_friction, 6);
@@ -106,6 +108,7 @@ void handleCommand(String command) {
     Serial.print("w_emf set to: "); Serial.println(w_emf, 6);
   } else if (command.equals("pid")) {
     runPID = true;
+    I = 0;
     Serial.println("Running Optimized BPTT controller");
   } else if (command.equals("stop")) {
     runPID = false;
@@ -132,8 +135,6 @@ void setup() {
   
   delay(1000);
   bno.setExtCrystalUse(true);
-  
-  //bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_IMUPLUS);
   bno.setMode(adafruit_bno055_opmode_t::OPERATION_MODE_NDOF);
   
   encoder1.resetCounter(0);
@@ -147,26 +148,9 @@ void setup() {
 }
 
 void loop() {
-  // if (dataChar.written()) {
-  //   String bleCommand = dataChar.value();
-  //   Serial.print("BLE Command: "); Serial.println(bleCommand);
-  //   handleCommand(bleCommand);
-  // }
-
   if (Serial.available()) {
     handleCommand(Serial.readStringUntil('\n'));
   }
-
-  // WiFiClient newClient = server.available();
-  // if (newClient) {
-  //   remoteClient = newClient; 
-  //   remoteClient.setTimeout(5);
-  //   Serial.println("Aplikacja Python podłączona przez WiFi");
-  // }
-  
-  // if (remoteClient && remoteClient.connected() && remoteClient.available()) {
-  //   handleCommand(remoteClient.readStringUntil('\n'));
-  // }
 
   lastMicros = micros();
   unsigned long targetMicros = lastMicros + Ts_micro;
@@ -188,11 +172,10 @@ void battery_read() {
   float batteryVoltage = battery.getRaw() / 236.0;
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
   
-  angle = -euler.y() - angle_offset;
+  angle = (-euler.y() - angle_offset) * DEG_TO_RAD;
   
   Serial.print("Battery: "); Serial.print(batteryVoltage, 3);
-  Serial.print(", Angle: "); Serial.println(angle, 2);
-  //delay(1000);
+  Serial.print(", Angle: "); Serial.println(angle, 4);
 }
 
 void PID_controller() {
@@ -204,14 +187,19 @@ void PID_controller() {
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
   acc = -accel.y();                    
-  velocity = gyro.y();       
+  velocity = gyro.y(); 
   
   float corrected_angle_deg = -euler.y() - angle_offset;
   angle = corrected_angle_deg * DEG_TO_RAD;
 
+  I *= integral_decay_factor;
+  if(abs(angle) > 0.01) I += angle * Ts;
+  if(abs(I) > 10.0f) I = copysign(10.0f, I);
+
   float vel_wheel = enc_vel * enc_to_rad;
 
-  float u_raw = -(K_angle * angle + K_velocity * velocity);
+  // --- OBLICZANIE U_RAW Z WYKORZYSTANIEM TABLICY WZMOCNIEŃ ---
+  float u_raw = -(K_gains[0] * angle + K_gains[1] * velocity + K_gains[2] * vel_wheel + K_gains[3] * I);
   float u = u_raw + w_friction * tanh(5.0f * u_raw) + w_emf * vel_wheel;
   u = constrain(u, -12.0f, 12.0f);
 
@@ -226,18 +214,10 @@ void PID_controller() {
                    String(angle, 4) + "," + 
                    String(velocity, 4) + "," + 
                    String(acc, 4) + "," + 
-                   String(enkoder * enc_to_rad, 4) + "," + 
+                   String(encoder1.getRawCount() * enc_to_rad, 4) + "," + 
                    String(fill, 2);
   
   Serial.println(dataFrame);
-
-  if (remoteClient && remoteClient.connected()) {
-    remoteClient.println(dataFrame);
-  }
-
-  if (BLE.connected()) {
-    dataChar.writeValue(dataFrame);
-  }
 
   if (abs(angle) < (10.0f * DEG_TO_RAD)) M3.setFill(fill);
   else M3.setFill(0);
