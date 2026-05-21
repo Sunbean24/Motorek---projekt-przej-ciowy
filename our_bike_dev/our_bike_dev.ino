@@ -18,7 +18,7 @@ volatile float integral_decay_factor = 0.9999f;
 volatile float angle=0.0f, velocity=0.0f, acc=0.0f;
 volatile int lastMicros = 0, lastCount;
 
-float angle_offset = -1.2f; 
+float angle_offset = -1.2f;
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 bool runPID = true;
