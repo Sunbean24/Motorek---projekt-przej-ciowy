@@ -24,14 +24,14 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55);
 bool runPID = true;
 
 // Indeksy: 0 = K_angle, 1 = K_velocity, 2 = K_wheel, 3 = K_integral
-volatile float K_gains[4] = {-150.47459412f, -19.59853363f, -0.16395524f, -10.49907494f};
-volatile float w_friction = 0.6832f;
-volatile float w_emf = 0.2000f;
+volatile float K_gains[4] = {-15.00000000f, -3.00000000f, 0.01000000f, -5.00000000f};
+volatile float w_friction = 1.0000f;
+volatile float w_emf = 0.0500f;
 
 const float C_matrix[3][8] = {
   { 1.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f },
-  { 3.1650f, 0.0000f, 1.9677f, -340.7180f, -18.6057f, 2.2722f, 4.2342f, 4.2484f },
-  { -2.8034f, 0.0000f, -0.3921f, 1469.3823f, 308.7707f, -65.5415f, -102.0640f, -102.3568f }
+  { 2.3136f, 0.0000f, 1.4490f, -340.2619f, 29.8258f, -8.5801f, -12.4564f, -12.4870f },
+  { 2.1551f, -0.0953f, 14.4028f, 0.1197f, -6.5069f, -6.8991f, -6.9153f, -6.9154f }
 };
 
 BLEService bikeService("19B10000-E8F2-537E-4F6C-D104768A1214");
